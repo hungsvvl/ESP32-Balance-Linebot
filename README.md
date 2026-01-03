@@ -1,4 +1,3 @@
-# ESP32-Balance-Linebot
 # ESP32 Balance LineBot (ICM-20948 + DRV8825 + 7 Line Sensors)
 
 Xe 2 bánh tự cân bằng kết hợp dò line, dùng ESP32 điều khiển động cơ qua DRV8825, lấy góc/nghiêng từ IMU ICM-20948 và đọc 7 mắt line theo thứ tự Trái → Phải.
