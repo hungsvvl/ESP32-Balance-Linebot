@@ -37,9 +37,9 @@ const uint32_t LEDC_RES_BITS = 10;
 const uint32_t MIN_FREQ = 20;
 
 // ================= PID & TUNING =================
-float Kp = 35.0f;
-float Ki = 0.0f;
-float Kd = 0.6f;
+float Kp = 70.0f;
+float Ki = 50.0f;
+float Kd = 1.1f;
 
 // Anti-Drift
 float Kpos = 0.0f;       
@@ -54,7 +54,7 @@ long maxSpeed = 15000;
 float killErrorDeg = 45.0f; // Góc ngã (tắt motor)
 
 float iZoneDeg = 4.0f;
-float deadbandDeg = 0.05f;
+float deadbandDeg = 0.0f;
 float Kv = 0.015f;
 float dAlpha = 0.9f;
 
