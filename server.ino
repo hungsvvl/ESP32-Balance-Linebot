@@ -1,234 +1,191 @@
-/*
- * ESP32 AUXILIARY - VIETNAMESE CONTROLLER V8.0
- * - PID Range: 0 - 200
- * - Sync Defaults: Khớp với thông số mặc định của xe
- * - Removed: Auto Raise
- */
-
 #include <WiFi.h>
 #include <WebServer.h>
 
-// ================= CẤU HÌNH =================
-#define RX_PIN 16 
-#define TX_PIN 17 
-#define BAUD_RATE 115200
-
-const char* ssid = "BROBOT_V8"; // Tên Wifi mới
+// ================= CẤU HÌNH WIFI =================
+const char* ssid = "Robot_Control";
 const char* password = "12345678";
 
 WebServer server(80);
-HardwareSerial LinkSerial(2); 
 
-String telemetryData = "{}"; 
-
-// HTML GIAO DIỆN
-const char INDEX_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="vi">
+// ================= GIAO DIỆN WEB (HTML CỦA BẠN) =================
+// Đặt trong PROGMEM để tiết kiệm RAM
+const char index_html[] PROGMEM = R"rawliteral(
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>BROBOT V8 CONTROL</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>ROBOT TUNING</title>
   <style>
-    :root { --bg: #0f0f0f; --panel: #1a1a1a; --text: #eee; --accent: #00e676; --blue: #2979ff; --red: #ff1744; --orange: #ff9100; }
-    body { font-family: sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 10px; padding-bottom: 100px; user-select: none; }
-    
-    .hud { background: #000; border: 2px solid #333; border-radius: 12px; height: 100px; position: relative; overflow: hidden; margin-bottom: 15px; }
-    .horizon { width: 150%; height: 2px; background: var(--accent); position: absolute; top: 50%; left: -25%; transition: transform 0.1s; box-shadow: 0 0 10px var(--accent); }
-    .val-display { position: absolute; top: 10px; left: 10px; font-family: monospace; font-size: 1.2em; color: var(--blue); font-weight: bold; }
-
-    .tabs { display: flex; margin-bottom: 15px; background: #000; border-radius: 8px; padding: 5px; }
-    .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; border-radius: 6px; font-weight: bold; color: #666; transition: 0.3s; }
-    .tab.active { background: var(--panel); color: var(--accent); box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
-    .tab-content { display: none; }
-    .tab-content.active { display: block; animation: fadeIn 0.3s; }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-    .section { background: var(--panel); padding: 15px; border-radius: 12px; margin-bottom: 12px; border-left: 5px solid var(--blue); }
-    h3 { margin: 0 0 15px 0; color: #888; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; }
-
-    .slider-container { display: flex; align-items: center; margin-bottom: 20px; }
-    .slider-label { flex: 1; font-weight: bold; font-size: 0.85em; }
-    .slider-val { width: 50px; text-align: right; color: var(--accent); font-family: monospace; font-weight: bold; }
-    input[type=range] { flex: 2; margin: 0 10px; height: 30px; -webkit-appearance: none; background: transparent; }
-    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 22px; width: 22px; border-radius: 50%; background: var(--accent); margin-top: -9px; border: 2px solid #fff; }
-    input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; background: #444; border-radius: 2px; }
-
-    .btn-stop { width: 100%; padding: 15px; background: var(--red); color: white; border: none; border-radius: 8px; font-weight: bold; font-size: 1.2em; margin-top: 10px; }
-    .btn-calib { width: 100%; padding: 12px; background: #333; color: #ccc; border: none; border-radius: 8px; margin-top: 5px; font-weight: bold; }
-
-    .joystick-wrapper { display: flex; justify-content: center; padding: 20px; }
-    .d-pad { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr; width: 240px; height: 240px; background: #2a2a2a; border-radius: 50%; gap: 8px; padding: 10px; box-shadow: 0 10px 20px rgba(0,0,0,0.5); border: 4px solid #333; }
-    .btn-joy { background: #383838; border: none; color: white; font-size: 1.5em; border-radius: 10px; display: flex; justify-content: center; align-items: center; transition: all 0.1s; cursor: pointer; }
-    .btn-joy:active { background: var(--accent); color: #000; transform: scale(0.95); }
-    .up { grid-column: 2; grid-row: 1; border-radius: 20px 20px 5px 5px; }
-    .left { grid-column: 1; grid-row: 2; border-radius: 20px 5px 5px 20px; }
-    .right { grid-column: 3; grid-row: 2; border-radius: 5px 20px 20px 5px; }
-    .down { grid-column: 2; grid-row: 3; border-radius: 5px 5px 20px 20px; }
-    .center { grid-column: 2; grid-row: 2; background: #151515; border-radius: 50%; font-size: 0.8em; border: 1px solid #444;}
+    :root{ --bg:#0b0f14; --panel:#111824; --card:#0f1622; --card2:#0d1420; --border:rgba(255,255,255,.08); --text:#e9eef7; --muted:rgba(233,238,247,.65); --muted2:rgba(233,238,247,.45); --accent:#7cf5d2; --warn:#ffd37c; --bad:#ff6b6b; --ok:#60ffa1; --radius:16px; --gap:12px; --shadow: 0 10px 30px rgba(0,0,0,.35); --shadow2: 0 6px 18px rgba(0,0,0,.28); }
+    *{ box-sizing:border-box; } html,body{ height:100%; }
+    body{ margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: radial-gradient(1000px 600px at 10% 0%, rgba(124,245,210,.10), transparent 55%), radial-gradient(900px 500px at 90% 10%, rgba(255,211,124,.08), transparent 55%), var(--bg); color:var(--text); -webkit-tap-highlight-color: transparent; }
+    .wrap{ max-width: 860px; margin: 0 auto; padding: 16px 14px 86px; }
+    header{ display:flex; align-items:flex-end; justify-content:space-between; gap:12px; padding: 10px 4px 14px; }
+    .title{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+    h1{ margin:0; font-size: 18px; letter-spacing:.08em; text-transform:uppercase; font-weight:800; }
+    .sub{ font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .grid{ display:grid; grid-template-columns: 1fr; gap: var(--gap); }
+    @media (min-width: 820px){ .grid{ grid-template-columns: 1fr 1fr; } }
+    .card{ background: linear-gradient(180deg, rgba(255,255,255,.03), transparent 22%), linear-gradient(180deg, var(--card), var(--card2)); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow2); overflow:hidden; }
+    .card .hd{ padding: 14px 14px 10px; border-bottom: 1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .card .hd h2{ margin:0; font-size: 14px; letter-spacing:.08em; text-transform:uppercase; color: rgba(233,238,247,.9); }
+    .card .bd{ padding: 12px 14px 14px; display:flex; flex-direction:column; gap: 12px; }
+    .row{ display:grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: rgba(0,0,0,.12); }
+    .rowTop{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .label{ display:flex; flex-direction:column; min-width:0; gap:2px; }
+    .label b{ font-size:13px; font-weight:750; letter-spacing:.02em; }
+    .label span{ font-size:11px; color: var(--muted2); }
+    .ctrls{ display:flex; align-items:center; gap:10px; flex-shrink:0; }
+    input[type="number"]{ width: 108px; padding: 9px 10px; border-radius: 12px; border: 1px solid var(--border); background: rgba(0,0,0,.25); color: var(--text); font-size: 13px; outline:none; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+    input[type="number"]:focus{ border-color: rgba(124,245,210,.45); box-shadow: 0 0 0 3px rgba(124,245,210,.12); }
+    input[type="range"]{ width:100%; accent-color: var(--accent); height: 34px; margin: 0; }
+    .btnRow{ display:flex; flex-wrap:wrap; gap:10px; }
+    button{ appearance:none; border:1px solid var(--border); background: rgba(255,255,255,.05); color: var(--text); padding: 10px 12px; border-radius: 14px; font-weight:700; letter-spacing:.02em; cursor:pointer; user-select:none; box-shadow: var(--shadow2); transition: transform .06s ease, border-color .15s ease, background .15s ease; touch-action: manipulation; }
+    button:active{ transform: translateY(1px) scale(.99); }
+    button:disabled{ opacity:.55; cursor:not-allowed; transform:none; }
+    .primary{ border-color: rgba(124,245,210,.35); background: linear-gradient(180deg, rgba(124,245,210,.18), rgba(124,245,210,.06)); }
+    .warn{ border-color: rgba(255,211,124,.35); background: linear-gradient(180deg, rgba(255,211,124,.18), rgba(255,211,124,.06)); }
+    .ghost{ background: rgba(255,255,255,.03); }
+    .pill{ font-size: 11px; padding: 6px 10px; border-radius: 999px; border:1px solid var(--border); color: var(--muted); background: rgba(0,0,0,.18); white-space:nowrap; }
+    .status{ position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: rgba(10,14,20,.72); backdrop-filter: blur(10px); border-top: 1px solid rgba(255,255,255,.08); display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; z-index: 50; }
+    .status .left{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+    .status .right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .status .last{ color: var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 68vw; }
+    .status .resp{ padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(0,0,0,.22); min-width: 88px; text-align:center; font-weight: 800; letter-spacing:.02em; }
+    .resp.ok{ color: var(--ok); border-color: rgba(96,255,161,.35); }
+    .resp.bad{ color: var(--bad); border-color: rgba(255,107,107,.35); }
+    .resp.wait{ color: var(--warn); border-color: rgba(255,211,124,.35); }
+    .miniHint{ font-size: 11px; color: var(--muted2); line-height: 1.35; }
   </style>
 </head>
 <body>
-
-  <div class="hud">
-    <div class="val-display">ANG: <span id="disp_ang">0.0</span> | KP: <span id="disp_kp">0</span></div>
-    <div class="horizon" id="horizon"></div>
-  </div>
-
-  <div class="tabs">
-    <div class="tab active" onclick="setTab(0)">CẤU HÌNH</div>
-    <div class="tab" onclick="setTab(1)">LÁI XE</div>
-  </div>
-
-  <div id="tab0" class="tab-content active">
-    
-    <div class="section">
-      <h3>1. Cân Bằng (Stability)</h3>
-      <div class="slider-container">
-        <div class="slider-label">Kp (Độ cứng)</div>
-        <input type="range" id="s_p" min="0" max="200" step="0.5" value="35.0" oninput="u('p',this.value)">
-        <div class="slider-val" id="v_p">35.0</div>
-      </div>
-      <div class="slider-container">
-        <div class="slider-label">Kd (Giảm rung)</div>
-        <input type="range" id="s_d" min="0" max="100" step="0.1" value="0.6" oninput="u('d',this.value)">
-        <div class="slider-val" id="v_d">0.6</div>
-      </div>
-      <div class="slider-container">
-        <div class="slider-label">Ki (Hồi vị)</div>
-        <input type="range" id="s_i" min="0" max="200" step="0.1" value="0.0" oninput="u('i',this.value)">
-        <div class="slider-val" id="v_i">0.0</div>
-      </div>
-    </div>
-
-    <div class="section" style="border-left-color: var(--orange)">
-      <h3>2. Chống Trôi (Anti-Drift)</h3>
-      <div class="slider-container">
-        <div class="slider-label">Kpos (Vị trí)</div>
-        <input type="range" id="s_x" min="0" max="0.5" step="0.001" value="0.0" oninput="u('x',this.value)">
-        <div class="slider-val" id="v_x">0.0</div>
-      </div>
-      <div class="slider-container">
-        <div class="slider-label">Kvel (Hãm tốc)</div>
-        <input type="range" id="s_y" min="0" max="5.0" step="0.01" value="0.0" oninput="u('y',this.value)">
-        <div class="slider-val" id="v_y">0.0</div>
-      </div>
-    </div>
-
-    <div class="section" style="border-left-color: #fbbf24">
-      <h3>3. Vật Lý & Tốc Độ</h3>
-      <div class="slider-container">
-        <div class="slider-label">Góc Target</div>
-        <input type="range" id="s_t" min="170" max="190" step="0.1" value="180.0" oninput="u('t',this.value)">
-        <div class="slider-val" id="v_t">180.0</div>
-      </div>
-      <div class="slider-container">
-        <div class="slider-label">Độ nhạy (Scale)</div>
-        <input type="range" id="s_s" min="1" max="50" step="0.5" value="12.0" oninput="u('s',this.value)">
-        <div class="slider-val" id="v_s">12.0</div>
-      </div>
-      <button class="btn-calib" onclick="send('c',1)">CALIB CẢM BIẾN (ĐIỂM 0)</button>
+  <div class="wrap">
+    <header>
+      <div class="title"><h1>ROBOT TUNING</h1><div class="sub">ESP32 WebServer • /set?c=&lt;cmd&gt;&amp;v=&lt;val&gt;</div></div>
+      <div class="pill mono" id="ipHint">/</div>
+    </header>
+    <div class="grid">
+      <section class="card"><div class="hd"><h2>PID Control</h2><span class="pill">Kp / Ki / Kd</span></div><div class="bd" id="pidCard"></div></section>
+      <section class="card"><div class="hd"><h2>Settings</h2><span class="pill">Target / Speed</span></div><div class="bd" id="settingsCard"></div></section>
+      <section class="card"><div class="hd"><h2>Quick Presets</h2><span class="pill">Batch send</span></div><div class="bd"><div class="btnRow"><button class="ghost" id="presetSoft">SOFT</button><button class="primary" id="presetNormal">NORMAL</button><button class="warn" id="presetAggressive">AGGRESSIVE</button></div></div></section>
+      <section class="card"><div class="hd"><h2>Actions & Storage</h2><span class="pill">Tools</span></div><div class="bd"><div class="btnRow"><button class="primary" id="btnCalib">AUTO CALIBRATE</button><button class="ghost" id="btnDebug">GET DEBUG INFO</button></div><div class="btnRow" style="margin-top:6px;"><button class="ghost" id="btnSave">Save to localStorage</button><button class="ghost" id="btnLoad">Load</button><button class="ghost" id="btnReset">Reset</button></div></div></section>
     </div>
   </div>
-
-  <div id="tab1" class="tab-content">
-    <div class="section" style="border:none; background: transparent; padding: 0;">
-      
-      <div class="joystick-wrapper">
-        <div class="d-pad">
-          <button class="btn-joy up" ontouchstart="drive('M', 200)" ontouchend="drive('M', 0)" onmousedown="drive('M', 200)" onmouseup="drive('M', 0)">▲</button>
-          <button class="btn-joy left" ontouchstart="drive('T', -80)" ontouchend="drive('T', 0)" onmousedown="drive('T', -80)" onmouseup="drive('T', 0)">◄</button>
-          <div class="btn-joy center">BROBOT</div>
-          <button class="btn-joy right" ontouchstart="drive('T', 80)" ontouchend="drive('T', 0)" onmousedown="drive('T', 80)" onmouseup="drive('T', 0)">►</button>
-          <button class="btn-joy down" ontouchstart="drive('M', -200)" ontouchend="drive('M', 0)" onmousedown="drive('M', -200)" onmouseup="drive('M', 0)">▼</button>
-        </div>
-      </div>
-      
-      <button class="btn-stop" onclick="send('p',0);send('i',0)">DỪNG KHẨN CẤP (PID=0)</button>
-    </div>
-  </div>
-
-  <script>
-    function setTab(idx) {
-      document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i===idx));
-      document.querySelectorAll('.tab-content').forEach((c, i) => c.classList.toggle('active', i===idx));
+  <div class="status" role="status"><div class="left"><div class="mono last" id="lastSent">Last: (none)</div><div class="mono" id="lastTime" style="color:var(--muted2);">—</div></div><div class="right"><div class="resp wait mono" id="httpState">IDLE</div></div></div>
+<script>
+(() => {
+  "use strict";
+  const CFG = {
+    endpoint: "/set", fetchTimeoutMs: 1800, debounceSliderMs: 200, debounceNumberMs: 300, batchDelayMs: 140, storageKey: "robot_tuning_v1",
+    params: {
+      kp: { label: "Kp", desc: "Angle P", cmd: "p", min: 0, max: 400, step: 0.1, def: 68.7 },
+      ki: { label: "Ki", desc: "Integral", cmd: "i", min: 0, max: 200, step: 0.01, def: 20.0 },
+      kd: { label: "Kd", desc: "Derivative", cmd: "d", min: 0, max: 50, step: 0.01, def: 1.6 },
+      target: { label: "Target", desc: "Angle target", cmd: "t", min: 150, max: 210, step: 0.1, def: 180 },
+      maxSpeed:{ label: "MaxSpeed", desc: "Stepper cap", cmd: "m", min: 1000,max: 25000,step: 100, def: 15000 },
+      speedScale:{ label: "SpeedScale", desc: "Scale factor", cmd: "s", min: 0.1, max: 40, step: 0.1, def: 12.0 },
+    },
+    presets: {
+      soft: { name: "SOFT", values: { kp: 45, ki: 8, kd: 1.6, target: 180, maxSpeed: 12000, speedScale: 10.5 } },
+      normal: { name: "NORMAL", values: { kp: 68.7, ki: 20, kd: 1.6, target: 180, maxSpeed: 15000, speedScale: 12.0 } },
+      aggressive: { name: "AGGRESSIVE", values: { kp: 90, ki: 30, kd: 3.8, target: 180, maxSpeed: 18000, speedScale: 14.0 } }
     }
-
-    let lastSend = 0;
-    let pendingCmd = null;
-
-    function u(key, val) {
-      document.getElementById('v_'+key).innerText = val; 
-      const now = Date.now();
-      if (now - lastSend > 100) { 
-        send(key, val);
-        lastSend = now;
-      } else {
-        clearTimeout(pendingCmd);
-        pendingCmd = setTimeout(() => { send(key, val); }, 110);
-      }
-    }
-
-    function send(key, val) { fetch('/set?c=' + key + '&v=' + val).catch(e=>{}); }
-    function drive(cmd, val) { fetch('/set?c=' + cmd + '&v=' + val).catch(e=>{}); }
-
-    setInterval(async () => {
-      try {
-        const res = await fetch('/tele');
-        const json = await res.json();
-        if(json.ang !== undefined) {
-          document.getElementById('disp_ang').innerText = json.ang;
-          document.getElementById('disp_kp').innerText = json.kp;
-          let rot = (json.ang - 180) * 3; 
-          document.getElementById('horizon').style.transform = `translate(0, -50%) rotate(${rot}deg)`;
-        }
-      } catch(e) {}
-    }, 250);
-  </script>
+  };
+  const state = {}, timers = {}, els = {};
+  const $ = (sel) => document.querySelector(sel);
+  function nowText(){ const d = new Date(); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`; }
+  function clampToStep(value, min, max, step){ let v = Number(value); if (!Number.isFinite(v)) v = min; v = Math.min(max, Math.max(min, v)); const inv = 1 / step; return Math.round(v * inv) / inv; }
+  function formatByStep(value, step){ const dp = (String(step).split(".")[1] || "").length; return dp ? Number(value).toFixed(dp) : String(Math.round(value)); }
+  function setHttpState(kind, text){ const el = els.httpState; el.classList.remove("ok","bad","wait"); if (kind === "ok") el.classList.add("ok"); else if (kind === "bad") el.classList.add("bad"); else el.classList.add("wait"); el.textContent = text; }
+  function setLastSent(cmd, val){ els.lastSent.textContent = `Last: ${cmd}=${val}`; els.lastTime.textContent = `@ ${nowText()}`; }
+  async function send(cmd, val){
+    const url = `${CFG.endpoint}?c=${encodeURIComponent(cmd)}&v=${encodeURIComponent(val)}`; setLastSent(cmd, val); setHttpState("wait", "SENDING");
+    try{ const res = await fetch(url, { method: "GET", cache: "no-store" }); if (!res.ok){ setHttpState("bad", `HTTP ${res.status}`); return false; } setHttpState("ok", "OK"); return true; } 
+    catch(err){ setHttpState("bad", "OFFLINE"); return false; }
+  }
+  function buildParamRow(key, cfg){
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = `<div class="rowTop"><div class="label"><b>${cfg.label}</b><span>${cfg.desc} • <span class="mono">${cfg.min}..${cfg.max}</span></span></div><div class="ctrls"><input type="number" id="num_${key}"></div></div><div><input type="range" id="rng_${key}"></div>`;
+    const num = row.querySelector(`#num_${key}`), rng = row.querySelector(`#rng_${key}`);
+    num.min = rng.min = cfg.min; num.max = rng.max = cfg.max; num.step = rng.step = cfg.step;
+    state[key] = clampToStep(cfg.def, cfg.min, cfg.max, cfg.step);
+    num.value = formatByStep(cfg.def, cfg.step); rng.value = String(cfg.def);
+    const sync = (v) => { v = clampToStep(v, cfg.min, cfg.max, cfg.step); state[key] = v; rng.value = String(v); num.value = formatByStep(v, cfg.step); return v; };
+    rng.addEventListener("input", () => { const v = sync(rng.value); clearTimeout(timers[key]); timers[key] = setTimeout(() => send(cfg.cmd, v), CFG.debounceSliderMs); });
+    num.addEventListener("input", () => { const v = sync(num.value); clearTimeout(timers[key]); timers[key] = setTimeout(() => send(cfg.cmd, v), CFG.debounceNumberMs); });
+    return row;
+  }
+  function render(){
+    els.pidCard = $("#pidCard"); els.settingsCard = $("#settingsCard"); els.lastSent = $("#lastSent"); els.lastTime = $("#lastTime"); els.httpState = $("#httpState");
+    for(const k of ["kp","ki","kd"]) els.pidCard.appendChild(buildParamRow(k, CFG.params[k]));
+    for(const k of ["target","maxSpeed","speedScale"]) els.settingsCard.appendChild(buildParamRow(k, CFG.params[k]));
+    $("#ipHint").textContent = location.pathname || "/";
+  }
+  function saveLocal(){ localStorage.setItem(CFG.storageKey, JSON.stringify({ values: state })); setHttpState("ok", "SAVED"); }
+  function loadLocal(){ try{ const raw = localStorage.getItem(CFG.storageKey); if(raw) applyValues(JSON.parse(raw).values, false); }catch(e){} }
+  function applyValues(vals, sendIt){ for(const k in vals){ if(!CFG.params[k])continue; const v = vals[k]; state[k]=v; $(`#num_${k}`).value=v; $(`#rng_${k}`).value=v; if(sendIt) send(CFG.params[k].cmd, v); } }
+  function wireActions(){
+    $("#btnCalib").onclick = () => send("c", "0"); $("#btnDebug").onclick = () => send("?", "0");
+    $("#btnSave").onclick = saveLocal; $("#btnLoad").onclick = loadLocal;
+    $("#presetSoft").onclick = () => applyValues(CFG.presets.soft.values, true);
+    $("#presetNormal").onclick = () => applyValues(CFG.presets.normal.values, true);
+    $("#presetAggressive").onclick = () => applyValues(CFG.presets.aggressive.values, true);
+  }
+  render(); wireActions(); loadLocal();
+})();
+</script>
 </body>
 </html>
 )rawliteral";
 
-void handleRoot() { server.send(200, "text/html", INDEX_HTML); }
+// ================= XỬ LÝ LỆNH TỪ WEB =================
+void handleRoot() {
+  server.send(200, "text/html", index_html);
+}
+
 void handleSet() {
   if (server.hasArg("c") && server.hasArg("v")) {
-    LinkSerial.print(server.arg("c")); LinkSerial.print(server.arg("v")); LinkSerial.print('\n'); 
+    String cmd = server.arg("c");
+    String val = server.arg("v");
+    
+    // Gửi lệnh xuống ESP Chính qua UART2 (Chân 17 TX)
+    Serial2.print(cmd);
+    Serial2.println(val);
+    
+    Serial.print("Web Sent: "); Serial.print(cmd); Serial.println(val);
     server.send(200, "text/plain", "OK");
-  } else { server.send(400, "text/plain", "Error"); }
+  } else {
+    server.send(400, "text/plain", "BAD REQ");
+  }
 }
-void handleTele() { server.send(200, "application/json", telemetryData); }
 
+// ================= SETUP & LOOP =================
 void setup() {
   Serial.begin(115200);
-  LinkSerial.begin(BAUD_RATE, SERIAL_8N1, RX_PIN, TX_PIN);
-  WiFi.mode(WIFI_AP);
+  
+  // Khởi động UART2 để nói chuyện với Robot
+  // TX=17, RX=16 (Nối chéo với Robot)
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);
+
+  // Tạo Wifi
   WiFi.softAP(ssid, password);
+  Serial.print("IP Web: ");
+  Serial.println(WiFi.softAPIP());
+
+  // Web Server
   server.on("/", handleRoot);
   server.on("/set", handleSet);
-  server.on("/tele", handleTele);
   server.begin();
 }
 
 void loop() {
   server.handleClient();
-  if (LinkSerial.available()) {
-    String line = LinkSerial.readStringUntil('\n');
-    if (line.indexOf("Angle:") >= 0) {
-      float ang = extractVal(line, "Angle:");
-      float kp = extractVal(line, "Kp:");
-      telemetryData = "{";
-      telemetryData += "\"ang\":" + String(ang) + ",";
-      telemetryData += "\"kp\":" + String(kp);
-      telemetryData += "}";
-    }
+  
+  // Nếu Robot gửi gì lên (VD: Debug info), in ra Serial máy tính để xem
+  while (Serial2.available()) {
+    Serial.write(Serial2.read());
   }
-}
-
-float extractVal(String str, String label) {
-  int idx = str.indexOf(label);
-  if (idx == -1) return 0;
-  int start = idx + label.length();
-  int end = str.indexOf(' ', start);
-  if (end == -1) end = str.length();
-  return str.substring(start, end).toFloat();
 }
