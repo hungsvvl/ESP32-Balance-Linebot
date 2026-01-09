@@ -5,6 +5,13 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// ================= THÊM: GIAO TIẾP VỚI ESP PHỤ =================
+// Sử dụng UART2 (Serial2) mặc định của ESP32
+#define LINK_RX 16
+#define LINK_TX 17
+HardwareSerial SerialLink(2); 
+
+// ================= CẤU HÌNH OLED =================
 #define OLED_SDA_PIN 25
 #define OLED_SCL_PIN 26
 TwoWire I2C_OLED = TwoWire(1);
@@ -15,6 +22,7 @@ TwoWire I2C_OLED = TwoWire(1);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &I2C_OLED, OLED_RESET);
 bool hasOLED = false;
 
+// ================= CẤU HÌNH MOTOR & MPU =================
 #define EN_PIN 27
 #define DIR_LEFT_PIN 13
 #define STEP_LEFT_PIN 12
@@ -25,11 +33,12 @@ bool hasOLED = false;
 const uint8_t LEDC_CHAN_L = 0;
 const uint8_t LEDC_CHAN_R = 1;
 const uint32_t LEDC_RES_BITS = 10;
-const uint32_t MIN_FREQ = 20;
+const uint32_t MIN_FREQ = 20; // Giữ 10Hz để an toàn
 
-float Kp = 80.0f;
-float Ki = 120.0f;
-float Kd = 1.3f;
+// ================= THAM SỐ PID =================
+float Kp = 68.7f;
+float Ki = 20.0f;
+float Kd = 1.6f;
 
 float targetAngle = 180.0f;
 float speedScale = 12.0f;
@@ -37,7 +46,7 @@ long maxSpeed = 15000;
 
 float killErrorDeg = 40.0f;
 float iZoneDeg = 4.0f;
-float deadbandDeg = 0.05f;
+float deadbandDeg = 0.0f;
 float Kv = 0.015f;
 float dAlpha = 0.9f;
 
@@ -73,6 +82,7 @@ uint8_t cmdLen = 0;
 static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 static inline long clampl(long v, long lo, long hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 
+// ================= PWM & MOTOR =================
 void setupPWM(uint8_t pin, uint8_t channel) {
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
   ledcAttach(pin, MIN_FREQ, LEDC_RES_BITS);
@@ -115,6 +125,7 @@ void applyMotorSpeed() {
   setPWMFreq(STEP_RIGHT_PIN, LEDC_CHAN_R, abs(spR));
 }
 
+// ================= OLED & DEBUG =================
 void handleOLED() {
   if (!hasOLED) return;
   if (millis() - lastOledUpdate < 250) return;
@@ -125,8 +136,11 @@ void handleOLED() {
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print(isRobotActive ? "RUN" : "IDLE");
+  
+  // Hiển thị thêm thông tin tuning lên màn hình
   display.setCursor(60, 0);
-  display.printf("T:%.1f", targetAngle);
+  display.print("P:"); display.print((int)Kp);
+  
   display.setCursor(10, 12);
   display.setTextSize(2);
   display.printf("%.2f", currentAngle);
@@ -134,11 +148,22 @@ void handleOLED() {
 }
 
 void printDebug() {
-  if (millis() - lastDebugTime < 1000) return;
+  if (millis() - lastDebugTime < 500) return; // Giảm tần suất gửi xuống 500ms
   lastDebugTime = millis();
-  Serial.printf("A:%.2f T:%.2f E:%.2f SPD:%ld PID:%.2f\n", currentAngle, targetAngle, error, motorSpeedL, pidOutput);
+  
+  // Tạo chuỗi debug
+  String logMsg = "A:" + String(currentAngle, 2) + 
+                  " T:" + String(targetAngle, 2) + 
+                  " Kp:" + String(Kp, 1) + 
+                  " Ki:" + String(Ki, 1) + 
+                  " Kd:" + String(Kd, 1) + "\r\n";
+  
+  // Gửi ra cả USB và ESP phụ
+  Serial.print(logMsg);
+  SerialLink.print(logMsg); 
 }
 
+// ================= PID & CALIB =================
 void computePID() {
   uint32_t nowUs = micros();
   if (lastPidUs == 0) { lastPidUs = nowUs; return; }
@@ -195,80 +220,52 @@ void computePID() {
 
 void performAutoCalibration() {
   if (hasOLED) {
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("CALIB...");
-    display.display();
+    display.clearDisplay(); display.setCursor(0, 0);
+    display.print("CALIB..."); display.display();
   }
-
-  mpu.resetFIFO();
-  fifoCount = 0;
-  long sumAngle = 0;
-  int samples = 0;
-  unsigned long startTime = millis();
+  mpu.resetFIFO(); fifoCount = 0;
+  long sumAngle = 0; int samples = 0; unsigned long startTime = millis();
 
   while (samples < 100) {
-    if (millis() - startTime > 3000) {
-      targetAngle = 180.0f;
-      return;
-    }
-
+    if (millis() - startTime > 3000) { targetAngle = 180.0f; return; }
     if (!mpuInterrupt && fifoCount < packetSize) {
-      mpuIntStatus = mpu.getIntStatus();
-      fifoCount = mpu.getFIFOCount();
+      mpuIntStatus = mpu.getIntStatus(); fifoCount = mpu.getFIFOCount();
       if (fifoCount < packetSize) continue;
     }
-
-    mpuInterrupt = false;
-    mpuIntStatus = mpu.getIntStatus();
-    fifoCount = mpu.getFIFOCount();
-
-    if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-      mpu.resetFIFO();
-      continue;
-    }
-
+    mpuInterrupt = false; mpuIntStatus = mpu.getIntStatus(); fifoCount = mpu.getFIFOCount();
+    if ((mpuIntStatus & 0x10) || fifoCount == 1024) { mpu.resetFIFO(); continue; }
     if (mpuIntStatus & 0x02) {
       while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-      mpu.getFIFOBytes(fifoBuffer, packetSize);
-      fifoCount -= packetSize;
-
-      mpu.dmpGetQuaternion(&q, fifoBuffer);
-      mpu.dmpGetGravity(&gravity, &q);
-      mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-      sumAngle += (long)(ypr[1] * 180.0f / M_PI + 180.0f);
-      samples++;
+      mpu.getFIFOBytes(fifoBuffer, packetSize); fifoCount -= packetSize;
+      mpu.dmpGetQuaternion(&q, fifoBuffer); mpu.dmpGetGravity(&gravity, &q); mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+      sumAngle += (long)(ypr[1] * 180.0f / M_PI + 180.0f); samples++;
     }
   }
   targetAngle = (float)sumAngle / 100.0f;
+  
+  // Gửi thông báo đã Calib xong cho ESP phụ
+  SerialLink.print("CALIB_DONE: "); SerialLink.println(targetAngle);
 }
 
 void handleDMP() {
   if (!mpuInterrupt && fifoCount < packetSize) return;
-  mpuInterrupt = false;
-  mpuIntStatus = mpu.getIntStatus();
-  fifoCount = mpu.getFIFOCount();
+  mpuInterrupt = false; mpuIntStatus = mpu.getIntStatus(); fifoCount = mpu.getFIFOCount();
 
   if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-    mpu.resetFIFO();
-    return;
+    mpu.resetFIFO(); return;
   }
 
   if (mpuIntStatus & 0x02) {
     if (fifoCount > packetSize) { mpu.resetFIFO(); return; }
     while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-    mpu.getFIFOBytes(fifoBuffer, packetSize);
-    fifoCount -= packetSize;
-
-    mpu.dmpGetQuaternion(&q, fifoBuffer);
-    mpu.dmpGetGravity(&gravity, &q);
-    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-
+    mpu.getFIFOBytes(fifoBuffer, packetSize); fifoCount -= packetSize;
+    mpu.dmpGetQuaternion(&q, fifoBuffer); mpu.dmpGetGravity(&gravity, &q); mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
     currentAngle = ypr[1] * 180.0f / M_PI + 180.0f;
     computePID();
   }
 }
 
+// ================= NHẬN LỆNH TỪ SERIAL VÀ SERIAL_LINK =================
 void parseCommand(char* str) {
   char cmd = str[0];
   float val = atof(str + 1);
@@ -286,25 +283,38 @@ void parseCommand(char* str) {
     case '?': lastDebugTime = 0; printDebug(); break;
   }
   iTerm = 0;
+  
+  // Phản hồi lại cho ESP phụ biết đã nhận lệnh
+  SerialLink.print("OK:"); SerialLink.print(cmd); SerialLink.println(val);
 }
 
 void handleSerial() {
+  // 1. Nhận lệnh từ Cổng USB (Máy tính)
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') { cmdBuf[cmdLen] = 0; parseCommand(cmdBuf); cmdLen = 0; }
     else if (cmdLen < 63) cmdBuf[cmdLen++] = c;
   }
+  
+  // 2. Nhận lệnh từ ESP Phụ (SerialLink - TX2/RX2)
+  while (SerialLink.available()) {
+    char c = SerialLink.read();
+    if (c == '\n') { cmdBuf[cmdLen] = 0; parseCommand(cmdBuf); cmdLen = 0; }
+    else if (cmdLen < 63) cmdBuf[cmdLen++] = c;
+  }
 }
 
+// ================= SETUP & LOOP =================
 void setup() {
   pinMode(EN_PIN, OUTPUT);
-  pinMode(DIR_LEFT_PIN, OUTPUT);
-  pinMode(STEP_LEFT_PIN, OUTPUT);
-  pinMode(DIR_RIGHT_PIN, OUTPUT);
-  pinMode(STEP_RIGHT_PIN, OUTPUT);
+  pinMode(DIR_LEFT_PIN, OUTPUT); pinMode(STEP_LEFT_PIN, OUTPUT);
+  pinMode(DIR_RIGHT_PIN, OUTPUT); pinMode(STEP_RIGHT_PIN, OUTPUT);
   digitalWrite(EN_PIN, LOW);
 
   Serial.begin(115200);
+  
+  // Khởi động SerialLink (UART2) chân 16(RX), 17(TX)
+  SerialLink.begin(115200, SERIAL_8N1, LINK_RX, LINK_TX);
 
   Wire.begin(21, 22);
   Wire.setClock(400000);
@@ -312,9 +322,7 @@ void setup() {
 
   I2C_OLED.begin(OLED_SDA_PIN, OLED_SCL_PIN, 400000);
   if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    hasOLED = true;
-    display.clearDisplay();
-    display.display();
+    hasOLED = true; display.clearDisplay(); display.display();
   }
 
   setupPWM(STEP_LEFT_PIN, LEDC_CHAN_L);
@@ -322,11 +330,8 @@ void setup() {
 
   mpu.initialize();
   uint8_t devStatus = mpu.dmpInitialize();
-
-  mpu.setXGyroOffset(120);
-  mpu.setYGyroOffset(130);
-  mpu.setZGyroOffset(-45);
-  mpu.setZAccelOffset(707);
+  mpu.setXGyroOffset(120); mpu.setYGyroOffset(130);
+  mpu.setZGyroOffset(-45); mpu.setZAccelOffset(707);
 
   if (devStatus == 0) {
     mpu.setDMPEnabled(true);
@@ -340,7 +345,7 @@ void setup() {
 
 void loop() {
   if (!dmpReady) return;
-  handleSerial();
+  handleSerial(); // Kiểm tra lệnh từ USB và ESP phụ
   handleDMP();
   handleOLED();
   printDebug();
