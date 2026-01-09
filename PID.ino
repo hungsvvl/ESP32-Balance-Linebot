@@ -5,7 +5,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// ================= THÊM: GIAO TIẾP VỚI ESP PHỤ =================
+// ================= GIAO TIẾP VỚI ESP PHỤ =================
 // Sử dụng UART2 (Serial2) mặc định của ESP32
 #define LINK_RX 16
 #define LINK_TX 17
@@ -33,7 +33,7 @@ bool hasOLED = false;
 const uint8_t LEDC_CHAN_L = 0;
 const uint8_t LEDC_CHAN_R = 1;
 const uint32_t LEDC_RES_BITS = 10;
-const uint32_t MIN_FREQ = 20; // Giữ 10Hz để an toàn
+const uint32_t MIN_FREQ = 20; // (Lưu ý: Nếu bị reset thì sửa thành 10)
 
 // ================= THAM SỐ PID =================
 float Kp = 68.7f;
@@ -76,8 +76,13 @@ uint32_t lastDebugTime = 0;
 uint32_t lastOledUpdate = 0;
 bool isRobotActive = false;
 
-char cmdBuf[64];
-uint8_t cmdLen = 0;
+// ===== [PATCH #2] TÁCH BUFFER CHO USB & UART LINK =====
+char cmdBufUSB[64];
+uint8_t cmdLenUSB = 0;
+
+char cmdBufLink[64];
+uint8_t cmdLenLink = 0;
+// ======================================================
 
 static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
 static inline long clampl(long v, long lo, long hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
@@ -137,7 +142,6 @@ void handleOLED() {
   display.setCursor(0, 0);
   display.print(isRobotActive ? "RUN" : "IDLE");
   
-  // Hiển thị thêm thông tin tuning lên màn hình
   display.setCursor(60, 0);
   display.print("P:"); display.print((int)Kp);
   
@@ -148,17 +152,15 @@ void handleOLED() {
 }
 
 void printDebug() {
-  if (millis() - lastDebugTime < 500) return; // Giảm tần suất gửi xuống 500ms
+  if (millis() - lastDebugTime < 500) return;
   lastDebugTime = millis();
   
-  // Tạo chuỗi debug
   String logMsg = "A:" + String(currentAngle, 2) + 
                   " T:" + String(targetAngle, 2) + 
                   " Kp:" + String(Kp, 1) + 
                   " Ki:" + String(Ki, 1) + 
                   " Kd:" + String(Kd, 1) + "\r\n";
   
-  // Gửi ra cả USB và ESP phụ
   Serial.print(logMsg);
   SerialLink.print(logMsg); 
 }
@@ -219,10 +221,12 @@ void computePID() {
 }
 
 void performAutoCalibration() {
+  // Hiển thị thông báo đang Calib
   if (hasOLED) {
     display.clearDisplay(); display.setCursor(0, 0);
-    display.print("CALIB..."); display.display();
+    display.print("CALIBRATING..."); display.display();
   }
+  
   mpu.resetFIFO(); fifoCount = 0;
   long sumAngle = 0; int samples = 0; unsigned long startTime = millis();
 
@@ -243,29 +247,40 @@ void performAutoCalibration() {
   }
   targetAngle = (float)sumAngle / 100.0f;
   
-  // Gửi thông báo đã Calib xong cho ESP phụ
   SerialLink.print("CALIB_DONE: "); SerialLink.println(targetAngle);
 }
 
+// ===== [PATCH #1] DMP FIFO: ĐỌC HẾT PACKET, KHÔNG RESET KHI fifoCount>packetSize =====
 void handleDMP() {
   if (!mpuInterrupt && fifoCount < packetSize) return;
-  mpuInterrupt = false; mpuIntStatus = mpu.getIntStatus(); fifoCount = mpu.getFIFOCount();
+
+  mpuInterrupt = false;
+  mpuIntStatus = mpu.getIntStatus();
+  fifoCount = mpu.getFIFOCount();
 
   if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-    mpu.resetFIFO(); return;
+    mpu.resetFIFO();
+    return;
   }
 
   if (mpuIntStatus & 0x02) {
-    if (fifoCount > packetSize) { mpu.resetFIFO(); return; }
-    while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-    mpu.getFIFOBytes(fifoBuffer, packetSize); fifoCount -= packetSize;
-    mpu.dmpGetQuaternion(&q, fifoBuffer); mpu.dmpGetGravity(&gravity, &q); mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+    // Đọc hết FIFO, giữ packet cuối cùng (mới nhất)
+    while (fifoCount >= packetSize) {
+      mpu.getFIFOBytes(fifoBuffer, packetSize);
+      fifoCount -= packetSize;
+    }
+
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
+    mpu.dmpGetGravity(&gravity, &q);
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+
     currentAngle = ypr[1] * 180.0f / M_PI + 180.0f;
     computePID();
   }
 }
+// ================================================================================
 
-// ================= NHẬN LỆNH TỪ SERIAL VÀ SERIAL_LINK =================
+// ================= NHẬN LỆNH =================
 void parseCommand(char* str) {
   char cmd = str[0];
   float val = atof(str + 1);
@@ -276,33 +291,40 @@ void parseCommand(char* str) {
     case 'd': Kd = val; break;
     case 't': targetAngle = val; break;
     case 's': speedScale = val; break;
-    case 'm': maxSpeed = clampl((long)val, 1000, 20000); break;
+
+    // ===== [PATCH #3] ĐỒNG BỘ MAXSPEED 25000 =====
+    case 'm': maxSpeed = clampl((long)val, 1000, 25000); break;
+    // ===========================================
+
     case 'b': deadbandDeg = val; break;
     case 'v': Kv = val; break;
     case 'c': performAutoCalibration(); break;
     case '?': lastDebugTime = 0; printDebug(); break;
   }
   iTerm = 0;
-  
-  // Phản hồi lại cho ESP phụ biết đã nhận lệnh
   SerialLink.print("OK:"); SerialLink.print(cmd); SerialLink.println(val);
 }
 
-void handleSerial() {
-  // 1. Nhận lệnh từ Cổng USB (Máy tính)
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n') { cmdBuf[cmdLen] = 0; parseCommand(cmdBuf); cmdLen = 0; }
-    else if (cmdLen < 63) cmdBuf[cmdLen++] = c;
-  }
-  
-  // 2. Nhận lệnh từ ESP Phụ (SerialLink - TX2/RX2)
-  while (SerialLink.available()) {
-    char c = SerialLink.read();
-    if (c == '\n') { cmdBuf[cmdLen] = 0; parseCommand(cmdBuf); cmdLen = 0; }
-    else if (cmdLen < 63) cmdBuf[cmdLen++] = c;
+// ===== [PATCH #2] HANDLE SERIAL: TÁCH BUFFER TRÁNH TRỘN LỆNH =====
+static inline void handleOneStream(Stream& s, char* buf, uint8_t& len) {
+  while (s.available()) {
+    char c = (char)s.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      buf[len] = 0;
+      if (len) parseCommand(buf);
+      len = 0;
+    } else if (len < 63) {
+      buf[len++] = c;
+    }
   }
 }
+
+void handleSerial() {
+  handleOneStream(Serial, cmdBufUSB, cmdLenUSB);
+  handleOneStream(SerialLink, cmdBufLink, cmdLenLink);
+}
+// ==================================================================
 
 // ================= SETUP & LOOP =================
 void setup() {
@@ -312,8 +334,6 @@ void setup() {
   digitalWrite(EN_PIN, LOW);
 
   Serial.begin(115200);
-  
-  // Khởi động SerialLink (UART2) chân 16(RX), 17(TX)
   SerialLink.begin(115200, SERIAL_8N1, LINK_RX, LINK_TX);
 
   Wire.begin(21, 22);
@@ -339,13 +359,26 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(MPU_INT_PIN), dmpDataReady, RISING);
     packetSize = mpu.dmpGetFIFOPacketSize();
     dmpReady = true;
+
+    // === [THÊM MỚI] AUTO CALIB KHI KHỞI ĐỘNG ===
+    // Chờ 2 giây để người dùng giữ xe ổn định
+    if(hasOLED) {
+      display.clearDisplay(); display.setCursor(0,0);
+      display.setTextSize(1); display.print("DO NOT MOVE!");
+      display.setCursor(0,10); display.print("Auto-Calib in 2s...");
+      display.display();
+    }
+    delay(2000); // Chờ 2s
+
+    // Thực hiện Calib
     performAutoCalibration();
+    // ==========================================
   }
 }
 
 void loop() {
   if (!dmpReady) return;
-  handleSerial(); // Kiểm tra lệnh từ USB và ESP phụ
+  handleSerial();
   handleDMP();
   handleOLED();
   printDebug();
